@@ -1,67 +1,29 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session
-from flask_sqlalchemy import SQLAlchemy
+import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
-import smtplib
 from email.mime.text import MIMEText
+import smtplib
 
-# Initialize the Flask application and database
+# Initialize Flask application
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mail_app.db'
-app.config['SECRET_KEY'] = 'gfhgfyj56765hgfjytvfy756vu67tvjhytu7v'
-db = SQLAlchemy(app)
+app.config['SECRET_KEY'] = 'yyhhsgj764wyvtuucybius4yw7iucbysgiw'
 
+# PostgreSQL Database configuration
+DATABASE_URI = "postgresql://mail_app_hwcn_user:V69J8HaTl4wb6Uh9BlqWzASy7Q3gnlpS@dpg-ct5gp93qf0us7386tq3g-a.oregon-postgres.render.com/mail_app_hwcn"
 
-# ContactForm Model
-class ContactForm(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # Link to the user who submitted the form
-    name = db.Column(db.String(150), nullable=False)
-    email = db.Column(db.String(150), nullable=False)
-    message = db.Column(db.Text, nullable=False)
-    submitted_at = db.Column(db.DateTime, default=db.func.current_timestamp())
-
-    def __repr__(self):
-        return f'<ContactForm {self.name} - {self.email}>'
-
-# User Model
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), nullable=False, unique=True)
-    email = db.Column(db.String(150), nullable=False, unique=True)
-    password = db.Column(db.String(150), nullable=False)
-
-    def __repr__(self):
-        return f'<User {self.username}>'
-
-# SentEmail Model
-class SentEmail(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    to_address = db.Column(db.String(150), nullable=False)
-    subject = db.Column(db.String(150))
-    body = db.Column(db.Text, nullable=False)
+# Function to establish database connection
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URI)
+    return conn
 
 # Routes
 @app.route('/')
 def home():
     return render_template('home.html')
+
 @app.route('/about')
 def about():
     return render_template('about.html')
-# @app.route('/contact', methods=['GET', 'POST'])
-# def contact():
-#     if request.method == 'POST':
-#         # Get form data
-#         name = request.form['name']
-#         email = request.form['email']
-#         message = request.form['message']
-        
-#         # Here you can add logic to send the message via email or save it to a database
-        
-#         flash('Message has been successfully sent!', 'success')
-#         return redirect(url_for('contact'))
-    
-#     return render_template('contact.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -69,44 +31,98 @@ def register():
         username = request.form['username']
         email = request.form['email']
         password = generate_password_hash(request.form['password'])
+
+        # Check if the email already exists
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        existing_user = cursor.fetchone()
         
-        new_user = User(username=username, email=email, password=password)
-        try:
-            db.session.add(new_user)
-            db.session.commit()
-            flash('Registration successful!')
-            return redirect(url_for('login'))
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Registration failed: {str(e)}', 'danger')
-    
+        if existing_user:
+            flash('Email already exists!', 'danger')
+            conn.close()
+            return redirect(url_for('register'))
+
+        # Insert new user into PostgreSQL
+        cursor.execute("INSERT INTO users (username, email, password) VALUES (%s, %s, %s)", 
+                       (username, email, password))
+        conn.commit()
+        conn.close()
+        flash('Registration successful!', 'success')
+        return redirect(url_for('login'))
+
     return render_template('register.html')
 
-@app.route('/login', methods=['GET', 'POST'])
+from werkzeug.security import check_password_hash
+
+from werkzeug.security import check_password_hash
+from flask import session, redirect, url_for, flash, render_template
+
+@app.route('/login', methods=['POST', 'GET'])
 def login():
     if request.method == 'POST':
         email = request.form['email']
         password = request.form['password']
-        user = User.query.filter_by(email=email).first()
-        if user and check_password_hash(user.password, password):
-            session['user_id'] = user.id
-            session['username'] = user.username
-            flash('Login successful!', 'success')
-            return redirect(url_for('dashboard'))
+
+        print(f"Received email: {email}")  # Debug print
+        print(f"Received password: {password}")  # Debug print
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+
+        if user:
+            print(f"User fetched: {user}")  # Debug print
+            if check_password_hash(user[3], password):  # Check hash from user[3]
+                session['user_id'] = user[0]  # Assuming user[0] is user_id
+                session['username'] = user[1]  # Assuming user[1] is username
+                print("Login successful, redirecting to dashboard...")  # Debug print
+                flash('Login successful!', 'success')
+                conn.close()
+                return redirect(url_for('dashboard'))
+            else:
+                flash('Invalid password.', 'danger')
         else:
-            flash('Invalid email or password.', 'danger')
-    
+            flash('No user found with this email address.', 'danger')
+
+        conn.close()
+
     return render_template('login.html')
+
+
+
+
+
 
 @app.route('/dashboard')
 def dashboard():
     if 'user_id' not in session:
         flash('Please log in to access the dashboard.', 'warning')
         return redirect(url_for('login'))
-    
+
     user_id = session['user_id']
-    sent_emails = SentEmail.query.filter_by(user_id=user_id).all()
-    return render_template('dashboard.html', sent_emails=sent_emails)
+    username = session['username']
+    
+    # Check if email exists in session, else default to an empty string
+    email = session.get('email', 'Email not found')
+
+    # Fetch messages from the database for this user
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT message FROM messages WHERE user_id = %s", (user_id,))
+    messages = cursor.fetchall()
+
+    # Extract message text from the list of tuples
+    message_list = [message[0] for message in messages]
+
+    conn.close()
+
+    return render_template('dashboard.html', username=username, email=email, messages=message_list)
+
+
+
+
 
 @app.route('/send_mail', methods=['POST'])
 def send_mail():
@@ -120,7 +136,7 @@ def send_mail():
     to_address = request.form['to_address']
     subject = request.form['subject']
     body = request.form['body']
-    
+
     # Set up SMTP connection
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
@@ -134,13 +150,15 @@ def send_mail():
             server.starttls()
             server.login(from_address, app_password)
             server.sendmail(from_address, to_address, message.as_string())
-        
-        # Save email to database
-        user_id = session['user_id']
-        sent_email = SentEmail(user_id=user_id, to_address=to_address, subject=subject, body=body)
-        db.session.add(sent_email)
-        db.session.commit()
 
+        # Save email to PostgreSQL
+        user_id = session['user_id']
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sent_emails (user_id, to_address, subject, body) VALUES (%s, %s, %s, %s)", 
+                       (user_id, to_address, subject, body))
+        conn.commit()
+        conn.close()
         flash('Email sent successfully!', 'success')
     except Exception as e:
         flash(f'Failed to send email: {str(e)}', 'danger')
@@ -149,11 +167,10 @@ def send_mail():
 
 @app.route('/logout')
 def logout():
-    session.clear()
+    session.clear()  # Clears session data
     flash('You have been logged out.', 'info')
-    return redirect(url_for('home'))
+    return redirect(url_for('login'))
 
-OWNER_EMAIL = 'shubhamprajapati9537@gmail..com'  # Replace with the owner's email address
 
 @app.route('/contact', methods=['GET', 'POST'])
 def contact():
@@ -161,29 +178,27 @@ def contact():
         if 'user_id' not in session:
             flash('Please log in to submit the contact form.', 'warning')
             return redirect(url_for('login'))
-        
+
         # Get form data
         name = request.form['name']
         email = request.form['email']
         message = request.form['message']
-        
-        # Save the contact form details to the database
+
+        # Save the contact form details to PostgreSQL
         try:
             user_id = session['user_id']
-            contact_entry = ContactForm(user_id=user_id, name=name, email=email, message=message)
-            db.session.add(contact_entry)
-            db.session.commit()
-            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO contact_forms (user_id, name, email, message) VALUES (%s, %s, %s, %s)", 
+                           (user_id, name, email, message))
+            conn.commit()
+            conn.close()
             flash('Your message has been submitted successfully!', 'success')
             return redirect(url_for('contact'))
         except Exception as e:
-            db.session.rollback()
             flash(f'Error submitting your message: {str(e)}', 'danger')
-            return redirect(url_for('contact'))
 
     return render_template('contact.html')
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()  # Create tables if they don't exist
-    app.run(debug=True,host="0.0.0.0",port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5000)
