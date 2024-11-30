@@ -1,0 +1,24 @@
+{
+    "version": 2,
+    "builds": [
+      {
+        "src": "app.py",
+        "use": "@vercel/python"
+      },
+      {
+        "src": "admin_app.py",
+        "use": "@vercel/python"
+      }
+    ],
+    "routes": [
+      {
+        "src": "/admin/(.*)",
+        "dest": "/admin_app.py"
+      },
+      {
+        "src": "/(.*)",
+        "dest": "/app.py"
+      }
+    ]
+  }
+  
